@@ -2,7 +2,9 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <memory>
 #include <string>
+#include <filesystem>
 
 
 // FROM LECTURE:  std::shared_ptr<sf::Shape> shape = std::make_shared<sf::CircleShape>(20);
@@ -10,31 +12,49 @@
 class Shape
 {
 protected:
-    std::string m_shapeName;
-    float m_xpos, m_ypos;
-    float m_xspeed, m_yspeed;
-    int m_r, m_g, m_b;
+    std::string m_name;
+    sf::Vector2f m_velocity;
     std::unique_ptr<sf::Shape> m_shape; //Keeps our drawable alive for each shape
+    sf::Text m_text;
 
 public:
-    Shape(std::string shapeName, float xpos, float ypos, float xspeed, float yspeed, int r, int g, int b)
-        : m_shapeName(shapeName)
-        , m_xpos(xpos)
-        , m_ypos(ypos)
-        , m_xspeed(xspeed)
-        , m_yspeed(yspeed)
-        , m_r(r)
-        , m_g(g)
-        , m_b(b)
+    Shape(std::string name, float xspeed, float yspeed)
+        : m_name (name)
+        , m_velocity (xspeed, yspeed)
     {
     }
 
-    virtual ~Shape()
+    virtual ~Shape() = default;
+
+    void setUpText(sf::Font& font, unsigned size, sf::Color& color)
     {
-        std::cout << "Destroy Shape\n";
+        m_text.setFont(font);
+        m_text.setString(m_name);
+        m_text.setFillColor(color);
+        m_text.setCharacterSize(size);
     }
 
-    void virtual buildShape(){}
+    void update(unsigned winW, unsigned winH)
+    {
+        m_shape->move(m_velocity);
+
+        sf::FloatRect bounds = m_shape->getGlobalBounds();
+
+        if ((bounds.left < 0 && m_velocity.x < 0) || (bounds.width + bounds.left > winW && m_velocity.x > 0))
+            m_velocity.x = -m_velocity.x;
+        if ((bounds.top < 0 && m_velocity.y < 0) || (bounds.top + bounds.height > winH && m_velocity.y > 0))
+            m_velocity.y = -m_velocity.y;
+
+        sf::FloatRect text = m_text.getLocalBounds();
+        m_text.setOrigin(text.left + text.width / 2.f, text.top + text.height / 2.f);
+        m_text.setPosition(bounds.left + bounds.width / 2.f, bounds.top + bounds.height / 2.f);
+    }
+
+    void draw(sf::RenderWindow& window)
+    {
+        window.draw(*m_shape);
+        window.draw(m_text);
+    }
 };
 
 class Circle : public Shape
@@ -42,37 +62,27 @@ class Circle : public Shape
     float m_radius;
 
 public:
-    Circle(std::string shapeName, float xpos, float ypos, float xspeed, float yspeed, int r, int g, int b, float radius)
-        : Shape(shapeName, xpos, ypos, xspeed, yspeed, r, g, b)
+    Circle(std::string& name, float xpos, float ypos, float xspeed, float yspeed, int r, int g, int b, float radius)
+        : Shape(name, xspeed, yspeed)
         , m_radius (radius)
     {
-    }
-
-    void buildShape()
-    {
-        sf::CircleShape circle(m_radius);
-        circle.setFillColor(sf::Color(m_r, m_g, m_b));
-        circle.setPosition(m_xpos, m_ypos);
+        auto c = std::make_unique<sf::CircleShape>(radius);
+        c->setFillColor(sf::Color(r, g, b));
+        c->setPosition(xpos, ypos);
+        m_shape = std::move(c);
     }
 };
 
 class Rectangle : public Shape
 {
-    float m_width, m_height;
-
 public:
-    Rectangle(std::string shapeName, float xpos, float ypos, float xspeed, float yspeed, int r, int g, int b, float width, float height)
-        : Shape(shapeName, xpos, ypos, xspeed, yspeed, r, g, b)
-        , m_width (width)
-        , m_height (height)
+    Rectangle(std::string name, float xpos, float ypos, float xspeed, float yspeed, int r, int g, int b, float width, float height)
+        : Shape(name, xspeed, yspeed)
     {
-    }
-
-    void buildShape()
-    {
-        sf::RectangleShape rectangle(sf::Vector2f(m_width, m_height));
-        rectangle.setFillColor(sf::Color(m_r, m_g, m_b));
-        rectangle.setPosition(m_xpos, m_ypos);
+        auto rect = std::make_unique<sf::RectangleShape>(sf::Vector2f(width, height));
+        rect->setFillColor(sf::Color(r, g, b));
+        rect->setPosition(xpos, ypos);
+        m_shape = std::move(rect);
     }
 };
 
@@ -80,30 +90,20 @@ public:
 
 class ShapeList
 {
-    std::vector<Shape> m_shapeList;
-    int m_wWidth;
-    int m_wHeight;
+    std::vector<std::unique_ptr<Shape>> m_shapeList;
+    unsigned m_wWidth = 800, m_wHeight = 600;
     sf::Font m_font;
-    int m_fontSize, m_fontR, m_fontG, m_fontB;
+    unsigned m_fontSize = 12;
+    sf::Color m_fontColor = sf::Color::White;
 
 public:
-        ShapeList() 
-        {
-            m_wWidth = 0;
-            m_wHeight = 0;
-            m_fontSize = 0;
-            m_fontR = 0;
-            m_fontG = 0;
-            m_fontB = 0;
-        }
-
         // Must be run after we load info from file
         sf::RenderWindow makeRenderWindow()
         {
             return sf::RenderWindow (sf::VideoMode(m_wWidth, m_wHeight), "Shapes");
         }
            
-        void loadFromFile(const std::string& filename)
+        bool loadFromFile(const std::string& filename)
         {
             std::ifstream fin(filename);
 
@@ -116,9 +116,11 @@ public:
                 }
                 else if (command == "Font")
                 {
-                    std::string font;
-                    fin >> font >> m_fontSize >> m_fontR >> m_fontG >> m_fontB;
-                    if (!m_font.loadFromFile(font))
+                    std::string file;
+                    int r, g, b;
+                    fin >> file >> m_fontSize >> r >> g >> b;
+                    m_fontColor = sf::Color(static_cast<sf::Uint8>(r), static_cast<sf::Uint8>(g), static_cast<sf::Uint8>(b));
+                    if (!m_font.loadFromFile(file))
                     {
                         std::cerr << "Could not load font!";
                         exit(-1);
@@ -133,8 +135,7 @@ public:
                     float radius;
                     fin >> shapeName >> xpos >> ypos >> xspeed >> yspeed >> r >> g >> b >> radius;
 
-                    m_shapeList.push_back(Circle(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, radius));
-                    m_shapeList.back().buildShape();
+                    m_shapeList.push_back(std::make_unique<Circle>(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, radius));
                 }
 
                 else if (command == "Rectangle")
@@ -146,26 +147,57 @@ public:
                     float width, height;
                     fin >> shapeName >> xpos >> ypos >> xspeed >> yspeed >> r >> g >> b >> width >> height;
 
-                    m_shapeList.push_back(Rectangle(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, width, height));
-                    m_shapeList.back().buildShape();
+                    m_shapeList.push_back(std::make_unique<Rectangle>(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, width, height));
                 }
-                else 
+                else
                 {
-                    break;
-                }
+                    std::cerr << "Unkown command '" << command << "', skipping line\n";
+                    std::string rest;
+                    std::getline(fin, rest);
+                } 
+            }
+
+            for (auto& s : m_shapeList)
+            {
+                s->setUpText(m_font, m_fontSize, m_fontColor);
+            }
+
+            return true;
+        }
+
+        unsigned width() const { return m_wWidth; }
+        unsigned height() const { return m_wHeight; }
+
+        void update()
+        {
+            for (auto& s : m_shapeList)
+            {
+                s->update(m_wWidth, m_wHeight);
             }
         }
 
-
+        void draw(sf::RenderWindow& window) const
+        {
+            for (const auto& s : m_shapeList)
+            {
+                s->draw(window);
+            }
+        }
 };
 
 int main(int argc, char * argv[])
-{
-    const std::string inputFile = "input.txt";
-    ShapeList shapes = ShapeList();
-    shapes.loadFromFile(inputFile);
+{   
+    std::cout << "Working directory: " << std::filesystem::current_path() << "\n";
+    std::cout << "input.txt exists: " << std::filesystem::exists("input.txt") << "\n";
 
-    sf::RenderWindow window = shapes.makeRenderWindow();
+
+    const std::string inputFile = "input.txt";
+    ShapeList shapes;
+    if(!shapes.loadFromFile(inputFile))
+        return -1;
+
+    sf::RenderWindow window(sf::VideoMode(shapes.width(), shapes.height()), "Shapes");
+    window.setFramerateLimit(60);
 
     while (window.isOpen())
     {
@@ -177,6 +209,12 @@ int main(int argc, char * argv[])
             if (event.type == sf::Event::Closed) 
                 window.close();
         }
+
+        shapes.update();
+        window.clear();
+
+        shapes.draw(window);
+        window.display();
     }
 
     return 0;
