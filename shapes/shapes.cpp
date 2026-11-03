@@ -7,14 +7,14 @@
 #include <filesystem>
 
 
-// FROM LECTURE:  std::shared_ptr<sf::Shape> shape = std::make_shared<sf::CircleShape>(20);
+// FROM LECTURE:  std::shared_ptr<sf::Shape> shape = std::make_shared<sf::CircleShape>(20)
 
 class Shape
 {
 protected:
     std::string m_name;
     sf::Vector2f m_velocity;
-    std::unique_ptr<sf::Shape> m_shape; //Keeps our drawable alive for each shape
+    std::shared_ptr<sf::Shape> m_shape; //Keeps our drawable alive for each shape
     sf::Text m_text;
 
 public:
@@ -34,20 +34,70 @@ public:
         m_text.setCharacterSize(size);
     }
 
-    void update(unsigned winW, unsigned winH)
+    void update(const unsigned winW, const unsigned winH, const std::vector<std::shared_ptr<Shape>> &shapeList)
     {
         m_shape->move(m_velocity);
 
-        sf::FloatRect bounds = m_shape->getGlobalBounds();
+        // Our current shape's bounds
+        sf::FloatRect curbounds = m_shape->getGlobalBounds();
 
-        if ((bounds.left < 0 && m_velocity.x < 0) || (bounds.width + bounds.left > winW && m_velocity.x > 0))
+        // Shape changes direction off of the window boundary
+        if ((curbounds.left < 0 && m_velocity.x < 0) || (curbounds.width + curbounds.left > winW && m_velocity.x > 0))
             m_velocity.x = -m_velocity.x;
-        if ((bounds.top < 0 && m_velocity.y < 0) || (bounds.top + bounds.height > winH && m_velocity.y > 0))
+        if ((curbounds.top < 0 && m_velocity.y < 0) || (curbounds.top + curbounds.height > winH && m_velocity.y > 0))
             m_velocity.y = -m_velocity.y;
+
+        // Handle collision with other shapes for this shape
+        for (auto& shape : shapeList)
+        {
+            if (shape->getShape() == m_shape)
+            {
+                continue;
+            }
+            sf::FloatRect bounds = shape->getShape()->getGlobalBounds();
+            sf::FloatRect overlap;
+            if (curbounds.intersects(bounds, overlap))
+            {
+                float curCenterX = curbounds.left + curbounds.width / 2.f;
+                float curCenterY = curbounds.top + curbounds.height / 2.f;
+                float centerX = bounds.left + bounds.width / 2.f;
+                float centerY = bounds.top + bounds.height / 2.f;
+
+                if (overlap.width < overlap.height)
+                {
+                    if (curCenterX < centerX)
+                    {
+                        m_shape->move(-overlap.width, 0.f);
+                    }
+                    else
+                    {
+                        m_shape->move(overlap.width, 0.f);
+                    }
+                    m_velocity.x = -m_velocity.x;
+                }
+                else 
+                {
+                    if (curCenterY < centerY)
+                    {
+                        m_shape->move(0.f, -overlap.height);
+                    }
+                    else
+                    {
+                        m_shape->move(0.f, overlap.height);
+                    }
+
+                    m_velocity.y = -m_velocity.y;
+                }
+
+                // Update our current shape bounds after every change
+                curbounds = m_shape->getGlobalBounds();
+            }
+        }
+
 
         sf::FloatRect text = m_text.getLocalBounds();
         m_text.setOrigin(text.left + text.width / 2.f, text.top + text.height / 2.f);
-        m_text.setPosition(bounds.left + bounds.width / 2.f, bounds.top + bounds.height / 2.f);
+        m_text.setPosition(curbounds.left + curbounds.width / 2.f, curbounds.top + curbounds.height / 2.f);
     }
 
     void draw(sf::RenderWindow& window)
@@ -55,6 +105,8 @@ public:
         window.draw(*m_shape);
         window.draw(m_text);
     }
+
+    std::shared_ptr<sf::Shape> getShape() { return m_shape; }
 };
 
 class Circle : public Shape
@@ -66,7 +118,7 @@ public:
         : Shape(name, xspeed, yspeed)
         , m_radius (radius)
     {
-        auto c = std::make_unique<sf::CircleShape>(radius);
+        auto c = std::make_shared<sf::CircleShape>(radius);
         c->setFillColor(sf::Color(r, g, b));
         c->setPosition(xpos, ypos);
         m_shape = std::move(c);
@@ -79,7 +131,7 @@ public:
     Rectangle(std::string name, float xpos, float ypos, float xspeed, float yspeed, int r, int g, int b, float width, float height)
         : Shape(name, xspeed, yspeed)
     {
-        auto rect = std::make_unique<sf::RectangleShape>(sf::Vector2f(width, height));
+        auto rect = std::make_shared<sf::RectangleShape>(sf::Vector2f(width, height));
         rect->setFillColor(sf::Color(r, g, b));
         rect->setPosition(xpos, ypos);
         m_shape = std::move(rect);
@@ -90,7 +142,7 @@ public:
 
 class ShapeList
 {
-    std::vector<std::unique_ptr<Shape>> m_shapeList;
+    std::vector<std::shared_ptr<Shape>> m_shapeList;
     unsigned m_wWidth = 800, m_wHeight = 600;
     sf::Font m_font;
     unsigned m_fontSize = 12;
@@ -135,7 +187,7 @@ public:
                     float radius;
                     fin >> shapeName >> xpos >> ypos >> xspeed >> yspeed >> r >> g >> b >> radius;
 
-                    m_shapeList.push_back(std::make_unique<Circle>(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, radius));
+                    m_shapeList.push_back(std::make_shared<Circle>(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, radius));
                 }
 
                 else if (command == "Rectangle")
@@ -147,7 +199,7 @@ public:
                     float width, height;
                     fin >> shapeName >> xpos >> ypos >> xspeed >> yspeed >> r >> g >> b >> width >> height;
 
-                    m_shapeList.push_back(std::make_unique<Rectangle>(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, width, height));
+                    m_shapeList.push_back(std::make_shared<Rectangle>(shapeName, xpos, ypos, xspeed, yspeed, r, g, b, width, height));
                 }
                 else
                 {
@@ -172,7 +224,7 @@ public:
         {
             for (auto& s : m_shapeList)
             {
-                s->update(m_wWidth, m_wHeight);
+                s->update(m_wWidth, m_wHeight, m_shapeList);
             }
         }
 
